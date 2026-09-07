@@ -43,18 +43,16 @@ def networkdays(start, end):
 # ══════════════════════════════════════════════════════════════════════════════
 #  CHARGEMENT DES DONNÉES DEPUIS GITHUB
 # ══════════════════════════════════════════════════════════════════════════════
-@st.cache_data(ttl=3600) # Mise en cache d'une heure pour ne pas re-télécharger à chaque clic
+@st.cache_data(ttl=3600)
 def load_data():
-    # L'espace dans le nom du fichier est remplacé par %20 pour être compatible avec les URL
     URL_GITHUB = "https://raw.githubusercontent.com/maximeponceblanc-a11y/D-lais/main/ANALYSE%20DELAIS.xlsx"
     
     try:
         response = requests.get(URL_GITHUB)
-        response.raise_for_status() # Vérifie si le téléchargement s'est bien passé
+        response.raise_for_status()
     except requests.exceptions.RequestException as e:
         raise FileNotFoundError(f"Impossible d'accéder au fichier sur GitHub : {e}")
 
-    # On lit les données binaires téléchargées comme si c'était un fichier physique
     file_bytes = io.BytesIO(response.content)
     wb = openpyxl.load_workbook(file_bytes, read_only=True, data_only=True)
     ws = wb.active
@@ -88,8 +86,6 @@ def load_data():
 
     NUMERIC_COLS = [
         "FAB", "QUANTITE", "PRIX TOTAL",
-        "Délai total: Devis / Dernière livraison",
-        "Délai ouverture: Devis / Ouverture de dossier",
         "Délai entre départ matière/ départ impression & achats", 
         "Délai marine: Premier envoi / Première livraison", 
         "Délai marine: Première livraison/ Dernière livraison"
@@ -98,6 +94,7 @@ def load_data():
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
+    E  = "DATE DEVIS"
     F  = "DATE COMMANDE"
     G  = "DATE COMMANDE MATIERE"
     H  = "DATE COMPLET MATIERE"
@@ -116,6 +113,11 @@ def load_data():
         return df.apply(lambda r: networkdays(r.get(a), r.get(b)) - 1
                         if pd.notna(r.get(a)) and pd.notna(r.get(b)) else np.nan, axis=1)
 
+    # Nouveaux délais issus du devis
+    df["Délai total: Devis / Dernière livraison"]                  = nwd(E, R)
+    df["Délai ouverture: Devis / Ouverture de dossier"]            = nwd(E, F)
+
+    # Délais existants
     df["Délai total: Ouverture / Dernière livraison"]              = nwd(F, R)
     df["Délai total: Ouverture / Première livraison"]              = nwd(F, Q)
     df["Ecart délai initial et réel"]                              = nwd(P, Q)
@@ -157,12 +159,12 @@ def load_data():
 
     return df, DATE_COLS
 
-# Configuration des sections incluant les délais placés séquentiellement
+# Configuration des sections : les deux nouveaux délais placés en tout premier
 SECTIONS = [
     ("Délai total: Devis / Dernière livraison",
-     "Délai total: Devis / Dernière livraison", "#8e44ad", "DATE DE LA DERNIERE LIVRAISON", 0),
+     "Délai total: Devis / Dernière livraison", "#1f4e79", "DATE DE LA DERNIERE LIVRAISON", 0),
     ("Délai ouverture: Devis / Ouverture de dossier",
-     "Délai ouverture: Devis / Ouverture de dossier", "#af7ac5", "DATE COMMANDE", 0),
+     "Délai ouverture: Devis / Ouverture de dossier", "#2e75b6", "DATE COMMANDE", 0),
     ("Délai total: Ouverture / Dernière livraison",
      "Délai total: Ouverture / Dernière livraison", "#1a7ba6", "DATE DE LA DERNIERE LIVRAISON", 0),
     ("Délai total: Ouverture / Première livraison",
@@ -217,14 +219,6 @@ def fmt_val(val):
         return str(int(val))
     return str(val)
 
-def fmt_price(val):
-    if pd.isna(val) or val is None:
-        return "—"
-    try:
-        return f"{float(val):,.2f} €".replace(",", " ").replace(".", ",")
-    except (TypeError, ValueError):
-        return "—"
-
 def safe_float(val):
     try:
         v = float(val)
@@ -266,6 +260,7 @@ with st.sidebar:
         fab_list = sorted(df["FAB"].dropna().astype(int).unique().tolist())
         fab_choice = st.selectbox("Numéro FAB", options=fab_list)
     else:
+        # Inversion : Filtres données en premier
         st.markdown("### 🔎 Filtres données")
 
         clients = sorted(df["CLIENT"].dropna().unique().tolist())
@@ -278,15 +273,13 @@ with st.sidebar:
         else:
             q_range = (q_min_all, q_max_all)
 
-        if "PRIX TOTAL" in df.columns:
-            p_min_all = float(df["PRIX TOTAL"].min(skipna=True)) if pd.notna(df["PRIX TOTAL"].min()) else 0.0
-            p_max_all = float(df["PRIX TOTAL"].max(skipna=True)) if pd.notna(df["PRIX TOTAL"].max()) else 100.0
-            if p_min_all < p_max_all:
-                prix_range = st.slider("Prix total (€)", min_value=p_min_all, max_value=p_max_all, value=(p_min_all, p_max_all))
-            else:
-                prix_range = (p_min_all, p_max_all)
+        # Filtre sur PRIX TOTAL
+        p_min_all = float(df["PRIX TOTAL"].min(skipna=True)) if pd.notna(df["PRIX TOTAL"].min()) else 0.0
+        p_max_all = float(df["PRIX TOTAL"].max(skipna=True)) if pd.notna(df["PRIX TOTAL"].max()) else 1000.0
+        if p_min_all < p_max_all:
+            p_range = st.slider("Prix total (€)", min_value=p_min_all, max_value=p_max_all, value=(p_min_all, p_max_all))
         else:
-            prix_range = None
+            p_range = (p_min_all, p_max_all)
 
         dates_valid = df["DATE COMMANDE"].dropna()
         if len(dates_valid):
@@ -297,6 +290,7 @@ with st.sidebar:
             date_range = None
 
         st.markdown("---")
+        # Filtrer par plages de délais en second
         st.markdown("### 🎚️ Filtrer par plages de délais")
         st.caption("Sélectionnez les valeurs minimales et maximales acceptées pour chaque délai (en j.o.).")
         
@@ -327,8 +321,8 @@ def apply_filters(data):
         d = d[d["CLIENT"].isin(client_filter)]
     if "QUANTITE" in d.columns:
         d = d[d["QUANTITE"].between(q_range[0], q_range[1], inclusive="both") | d["QUANTITE"].isna()]
-    if prix_range and "PRIX TOTAL" in d.columns:
-        d = d[d["PRIX TOTAL"].between(prix_range[0], prix_range[1], inclusive="both") | d["PRIX TOTAL"].isna()]
+    if "PRIX TOTAL" in d.columns and 'p_range' in globals():
+        d = d[d["PRIX TOTAL"].between(p_range[0], p_range[1], inclusive="both") | d["PRIX TOTAL"].isna()]
     if date_range and len(date_range) == 2:
         lo_d = pd.Timestamp(date_range[0])
         hi_d = pd.Timestamp(date_range[1])
@@ -367,12 +361,14 @@ if vue == "📁 Vue par dossier":
     col_info, col_metrics = st.columns([2, 3])
     with col_info:
         st.markdown("#### 📋 Informations commande")
+        px_val = row.get("PRIX TOTAL")
+        px_str = f"{px_val:,.2f} €".replace(",", " ").replace(".", ",") if pd.notna(px_val) else "—"
         info_data = {
             "FAB": fmt_val(row.get("FAB")),
             "CLIENT": fmt_val(row.get("CLIENT")),
             "NOM PRODUIT": fmt_val(row.get("NOM PRODUIT")),
             "QUANTITÉ": fmt_val(row.get("QUANTITE")),
-            "PRIX TOTAL": fmt_price(row.get("PRIX TOTAL")),
+            "PRIX TOTAL": px_str,
             "TYPE NUANCIER": fmt_val(row.get("TYPE NUANCIER")),
             "NB DÉPART": fmt_val(row.get("NB DEPART ")),
             "TYPE BLOCAGE": fmt_val(row.get("TYPE BLOCAGE")),
@@ -384,16 +380,12 @@ if vue == "📁 Vue par dossier":
     with col_metrics:
         st.markdown("#### 📅 Métriques clés")
         m1, m2, m3 = st.columns(3)
-        m4, m5, m6 = st.columns(3)
-        m7, m8, _ = st.columns(3)
+        m4, m5, _ = st.columns(3)
         m1.metric("Date devis", fmt_date(row.get("DATE DEVIS")))
         m2.metric("Date commande", fmt_date(row.get("DATE COMMANDE")))
         m3.metric("Dernière livraison", fmt_date(row.get("DATE DE LA DERNIERE LIVRAISON")))
-        m4.metric("Livraison réelle", fmt_date(row.get("DATE DE LIVRAISON REELLE")))
-        m5.metric("Délai total (j.o.)", fmt_val(row.get("Délai total: Ouverture / Dernière livraison")))
-        m6.metric("Écart initial/réel", fmt_val(row.get("Ecart délai initial et réel")))
-        m7.metric("Délai devis → dernière livr. (j.o.)", fmt_val(row.get("Délai total: Devis / Dernière livraison")))
-        m8.metric("Délai devis → ouverture (j.o.)", fmt_val(row.get("Délai ouverture: Devis / Ouverture de dossier")))
+        m4.metric("Délai total (j.o.)", fmt_val(row.get("Délai total: Ouverture / Dernière livraison")))
+        m5.metric("Écart initial/réel", fmt_val(row.get("Ecart délai initial et réel")))
 
     st.markdown("---")
     st.subheader(f"📐 Diagramme des délais — FAB {int(fab_choice)}")
@@ -415,7 +407,6 @@ if vue == "📁 Vue par dossier":
     min_mat_tir = min(valid_tot) if valid_tot else 0
     max_mat_tir = max(valid_tot) if valid_tot else 0
 
-    # Pour un dossier unique, la valeur absolue reste nécessaire pour l'affichage physique de l'écart
     d_entre_dept = get_v("Délai entre départ matière/ départ impression & achats")
     d_tot_prem_liv = get_v("Délai total: Ouverture / Première livraison")
 
@@ -469,20 +460,25 @@ if vue == "📁 Vue par dossier":
     st.subheader("📅 Dates clés")
     DATE_LABELS_MAP = {
         "DATE DEVIS": "Date devis",
-        "DATE COMMANDE": "Date commande", "DATE COMMANDE MATIERE": "Date commande matière",
-        "DATE COMPLET MATIERE": "Date complet matière", "DATE FICHIER": "Date fichier définitif",
-        "DATE VALID MODELE CLIENT": "Date validation modèle client", "DATE PAPIER 380 GR": "Date papier 380 gr",
-        "DATE IMPRESSION": "Date impression", "DATE CARTON": "Date carton",
-        "DEPART EN PROD MATIERE": "Départ en prod matière", "DEPART EN PROD TIRAGES & ACHATS": "Départ en prod tirages & achats",
-        "DATE DE LIVRAISON INITIALE": "Date livraison initiale", "DATE DE LIVRAISON REELLE": "Date livraison réelle",
+        "DATE COMMANDE": "Date commande",
+        "DATE COMMANDE MATIERE": "Date commande matière",
+        "DATE COMPLET MATIERE": "Date complet matière",
+        "DATE FICHIER": "Date fichier définitif",
+        "DATE VALID MODELE CLIENT": "Date validation modèle client",
+        "DATE PAPIER 380 GR": "Date papier 380 gr",
+        "DATE IMPRESSION": "Date impression",
+        "DATE CARTON": "Date carton",
+        "DEPART EN PROD MATIERE": "Départ en prod matière",
+        "DEPART EN PROD TIRAGES & ACHATS": "Départ en prod tirages & achats",
+        "DATE DE LIVRAISON INITIALE": "Date livraison initiale",
+        "DATE DE LIVRAISON REELLE": "Date livraison réelle",
         "DATE DE LA DERNIERE LIVRAISON": "Date dernière livraison",
     }
     date_rows = [{"Étape": lbl, "Date": fmt_date(row.get(col))} for col, lbl in DATE_LABELS_MAP.items() if col in df.columns]
     st.dataframe(pd.DataFrame(date_rows), use_container_width=True, hide_index=True)
 
-
 # ══════════════════════════════════════════════════════════════════════════════
-#  VUE 2 : DÉLAIS MOYENS (AVEC LA CORRECTION DE L'ÉCART ALGEBRIQUE MOYEN EN J.O.)
+#  VUE 2 : DÉLAIS MOYENS
 # ══════════════════════════════════════════════════════════════════════════════
 else:
     df_f = apply_filters(df)
@@ -494,21 +490,14 @@ else:
     st.caption(f"Données affichées : **{len(df_f)}** dossiers sur {len(df)} au total.")
 
     c1, c2, c3, c4 = st.columns(4)
-    c5, c6, c7, _ = st.columns(4)
     avg_total = get_mean(df_f["Délai total: Ouverture / Dernière livraison"])
     avg_ecart = get_mean(df_f["Ecart délai initial et réel"])
     avg_mat   = get_mean(df_f["Délai total matière: Ouverture / Départ en prod matière"])
-    avg_devis_liv = get_mean(df_f["Délai total: Devis / Dernière livraison"]) if "Délai total: Devis / Dernière livraison" in df_f.columns else np.nan
-    avg_devis_ouv = get_mean(df_f["Délai ouverture: Devis / Ouverture de dossier"]) if "Délai ouverture: Devis / Ouverture de dossier" in df_f.columns else np.nan
-    avg_prix = get_mean(df_f["PRIX TOTAL"]) if "PRIX TOTAL" in df_f.columns else np.nan
 
     c1.metric("📁 Dossiers filtrés", len(df_f))
     c2.metric("⏱ Moy. délai total", f"{avg_total:.1f} j.o." if pd.notna(avg_total) else "—")
     c3.metric("⚖️ Moy. écart init/réel", f"{avg_ecart:.1f} j.o." if pd.notna(avg_ecart) else "—")
     c4.metric("🪵 Moy. délai matière", f"{avg_mat:.1f} j.o." if pd.notna(avg_mat) else "—")
-    c5.metric("🧾 Moy. délai devis → dernière livr.", f"{avg_devis_liv:.1f} j.o." if pd.notna(avg_devis_liv) else "—")
-    c6.metric("🧾 Moy. délai devis → ouverture", f"{avg_devis_ouv:.1f} j.o." if pd.notna(avg_devis_ouv) else "—")
-    c7.metric("💰 Moy. prix total", fmt_price(avg_prix) if pd.notna(avg_prix) else "—")
 
     st.markdown("---")
     st.subheader("📐 Diagramme des délais moyens")
@@ -533,18 +522,9 @@ else:
     min_mat_tir_avg = min(valid_tot_avg) if valid_tot_avg else 0
     max_mat_tir_avg = max(valid_tot_avg) if valid_tot_avg else 0
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # CORRECTION CRITIQUE : CALCUL DE L'ÉCART MOYEN COMPENSÉ EN JOURS OUVRÉS
-    # ══════════════════════════════════════════════════════════════════════════
-    # On calcule l'écart algébrique réel en jours ouvrés pour chaque dossier filtré
     ecarts_individuels_jo = df_f["Délai total matière: Ouverture / Départ en prod matière"] - df_f["Délai total tirages et achats: Ouverture / Départ en prod tirages et achats"]
-    
-    # On fait la moyenne arithmétique simple (les + et les - s'annulent/se compensent ici)
     moyenne_des_ecarts_jo = ecarts_individuels_jo.dropna().mean()
-    
-    # On prend la valeur absolue à la toute fin pour l'affichage de la taille du bloc
     avg_entre_dept = abs(moyenne_des_ecarts_jo) if pd.notna(moyenne_des_ecarts_jo) else np.nan
-    # ══════════════════════════════════════════════════════════════════════════
 
     avg_tot_prem_liv = get_avg("Délai total: Ouverture / Première livraison")
 
@@ -563,7 +543,6 @@ else:
 
     labels_a, values_a, colors_a, texts_a, bases_a = [], [], [], [], []
     for label, col, color, _, _ in SECTIONS:
-        # Si c'est notre colonne modifiée, on force notre nouvelle valeur calculée
         if col == "Délai entre départ matière/ départ impression & achats":
             val = avg_entre_dept
         else:
@@ -602,7 +581,7 @@ else:
 
     DELAI_DATE_MAP = {
         "Délai total: Devis / Dernière livraison":                  "DATE DE LA DERNIERE LIVRAISON",
-        "Délai ouverture: Devis / Ouverture de dossier":             "DATE COMMANDE",
+        "Délai ouverture: Devis / Ouverture de dossier":            "DATE COMMANDE",
         "Délai total: Ouverture / Dernière livraison":              "DATE DE LA DERNIERE LIVRAISON",
         "Délai total: Ouverture / Première livraison":              "DATE DE LIVRAISON REELLE",
         "Délai entre départ matière/ départ impression & achats":   "DEPART EN PROD TIRAGES & ACHATS",
@@ -622,8 +601,9 @@ else:
         "Délai Impression / Départ en prod tirages et achats":      "DEPART EN PROD TIRAGES & ACHATS",
     }
 
-    p_vals = df_f["PRIX TOTAL"].dropna() if "PRIX TOTAL" in df_f.columns else pd.Series(dtype=float)
-    p_min_v = p_vals.min() if len(p_vals) else 1
+    # Calcul de la taille du point basé sur PRIX TOTAL
+    p_vals = df_f["PRIX TOTAL"].dropna() if "PRIX TOTAL" in df_f.columns else pd.Series()
+    p_min_v = p_vals.min() if len(p_vals) else 0
     p_max_v = p_vals.max() if len(p_vals) else 1
     p_range_v = p_max_v - p_min_v if p_max_v > p_min_v else 1
 
@@ -654,18 +634,17 @@ else:
             sub["_date_assoc"] = sub[date_col].apply(fmt_date) if date_col and date_col in sub.columns else "—"
             sub["_hover_fab"]  = sub["FAB"].apply(lambda x: str(int(x)) if pd.notna(x) else "—")
             sub["_hover_q"]    = sub["QUANTITE"].apply(lambda x: str(int(x)) if pd.notna(x) else "—")
-            sub["_hover_prix"] = sub["PRIX TOTAL"].apply(fmt_price)
+            sub["_hover_p"]    = sub["PRIX TOTAL"].apply(lambda x: f"{x:,.2f} €".replace(",", " ").replace(".", ",") if pd.notna(x) else "—")
 
             fig_sc = go.Figure()
             fig_sc.add_trace(go.Scatter(
                 x=sub["DATE COMMANDE"], y=sub[delai_col], mode="markers",
                 marker=dict(size=sub["_size"], color=color, opacity=0.75, line=dict(color="white", width=1)),
-                customdata=np.stack([sub["_hover_fab"], sub["CLIENT"].fillna("—"), sub["NOM PRODUIT"].fillna("—"), sub["_hover_q"], sub["DATE COMMANDE"].apply(fmt_date), sub["_date_assoc"], sub["_hover_prix"]], axis=1),
-                hovertemplate=("<b>FAB %{customdata[0]}</b><br>Client : %{customdata[1]}<br>Produit : %{customdata[2]}<br>Quantité : %{customdata[3]}<br>Prix total : %{customdata[6]}<br>Date commande : %{customdata[4]}<br>Date associée : %{customdata[5]}<br><b>Délai : %{y:.0f} j.o.</b><extra></extra>"),
+                customdata=np.stack([sub["_hover_fab"], sub["CLIENT"].fillna("—"), sub["NOM PRODUIT"].fillna("—"), sub["_hover_q"], sub["_hover_p"], sub["DATE COMMANDE"].apply(fmt_date), sub["_date_assoc"]], axis=1),
+                hovertemplate=("<b>FAB %{customdata[0]}</b><br>Client : %{customdata[1]}<br>Produit : %{customdata[2]}<br>Quantité : %{customdata[3]}<br>Prix total : %{customdata[4]}<br>Date commande : %{customdata[5]}<br>Date associée : %{customdata[6]}<br><b>Délai : %{y:.0f} j.o.</b><extra></extra>"),
                 showlegend=False,
             ))
 
-            # Affichage de la ligne de moyenne modifiée également pour le nuage de points dédié
             if delai_col == "Délai entre départ matière/ départ impression & achats":
                 moy = avg_entre_dept
             else:
@@ -710,7 +689,7 @@ else:
         if "QUANTITE" in df_show.columns:
             df_show["QUANTITE"] = df_show["QUANTITE"].apply(lambda x: str(int(x)) if pd.notna(x) else "—")
         if "PRIX TOTAL" in df_show.columns:
-            df_show["PRIX TOTAL"] = df_show["PRIX TOTAL"].apply(fmt_price)
+            df_show["PRIX TOTAL"] = df_show["PRIX TOTAL"].apply(lambda x: f"{x:,.2f} €".replace(",", " ").replace(".", ",") if pd.notna(x) else "—")
         st.dataframe(df_show, use_container_width=True, hide_index=True)
 
 st.markdown("<div style='text-align:center;color:#aaa;font-size:11px;margin-top:2rem;'>Tableau de bord Analyse Délais — données synchronisées avec GitHub</div>", unsafe_allow_html=True)
