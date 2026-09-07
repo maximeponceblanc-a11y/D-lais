@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 import openpyxl
 import requests
 import io
+import unicodedata
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  CONFIG
@@ -25,6 +26,30 @@ st.markdown("""
     h1 { color: #1a5276; }
 </style>
 """, unsafe_allow_html=True)
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  PALETTE DE 8 COULEURS & NORMALISATION CLIENTS
+# ══════════════════════════════════════════════════════════════════════════════
+PALETTE_8 = [
+    "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728",
+    "#9467bd", "#8c564b", "#e377c2", "#7f7f7f"
+]
+
+def normalize_client(name):
+    """Normalise le nom du client pour gérer les variations (casse, accents, espaces)."""
+    if pd.isna(name):
+        return "INCONNU"
+    # Supprime les accents, met en majuscule, et nettoie les espaces multiples
+    n_str = str(name).strip()
+    n_str = ''.join(c for c in unicodedata.normalize('NFD', n_str) if unicodedata.category(c) != 'Mn')
+    n_str = " ".join(n_str.upper().split())
+    
+    # Dictionnaire de correspondance optionnel pour fusionner des variantes explicites connues
+    # (vous pouvez l'enrichir si des variantes spécifiques persistent)
+    mapping_specifique = {
+        # "CLIENT A VARIANT": "CLIENT A",
+    }
+    return mapping_specifique.get(n_str, n_str)
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  NETWORKDAYS (sans jours fériés)
@@ -73,6 +98,11 @@ def load_data():
 
     df = pd.DataFrame(raw[1:], columns=headers)
 
+    # Normalisation de la colonne CLIENT dès le chargement
+    if "CLIENT" in df.columns:
+        df["CLIENT_ORIGINEL"] = df["CLIENT"]
+        df["CLIENT"] = df["CLIENT"].apply(normalize_client)
+
     DATE_COLS = [
         "DATE DEVIS", "DATE COMMANDE", "DATE COMMANDE MATIERE", "DATE COMPLET MATIERE",
         "DATE FICHIER", "DATE VALID MODELE CLIENT", "DATE PAPIER 380 GR",
@@ -113,11 +143,8 @@ def load_data():
         return df.apply(lambda r: networkdays(r.get(a), r.get(b)) - 1
                         if pd.notna(r.get(a)) and pd.notna(r.get(b)) else np.nan, axis=1)
 
-    # Nouveaux délais issus du devis
     df["Délai total: Devis / Dernière livraison"]                  = nwd(E, R)
     df["Délai ouverture: Devis / Ouverture de dossier"]            = nwd(E, F)
-
-    # Délais existants
     df["Délai total: Ouverture / Dernière livraison"]              = nwd(F, R)
     df["Délai total: Ouverture / Première livraison"]              = nwd(F, Q)
     df["Ecart délai initial et réel"]                              = nwd(P, Q)
@@ -248,6 +275,10 @@ except Exception as e:
 
 ALL_DATE_COLS = [c for c in DATE_COLS if c in df.columns]
 DELAI_COLS = [s[1] for s in SECTIONS]
+
+# Construction d'une cartographie fixe de 8 couleurs pour l'ensemble des clients triés
+all_unique_clients = sorted([c for c in df["CLIENT"].dropna().unique() if c != ""])
+client_color_map = {client: PALETTE_8[i % len(PALETTE_8)] for i, client in enumerate(all_unique_clients)}
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  BARRE LATÉRALE
@@ -610,6 +641,7 @@ else:
 
     st.markdown("---")
     st.subheader("🔵 Nuages de points — Délais par date d'ouverture")
+    st.caption("ℹ️ Les points sont colorés par client (palette fixe de 8 couleurs). Survolez un point pour voir les détails.")
 
     DELAI_DATE_MAP = {
         "Délai total: Devis / Dernière livraison":                  "DATE DE LA DERNIERE LIVRAISON",
@@ -648,13 +680,12 @@ else:
         cols = st.columns(2)
         for col_idx, section in enumerate([left, right]):
             if section is None: continue
-            label, delai_col, color, _, _ = section
+            label, delai_col, _, _, _ = section
             date_col = DELAI_DATE_MAP.get(delai_col)
 
             if delai_col not in df_f.columns:
                 continue
 
-            # Correction des doublons de colonnes
             cols_to_keep = ["FAB", "CLIENT", "NOM PRODUIT", "QUANTITE", "PRIX TOTAL", "DATE COMMANDE", delai_col]
             if date_col and date_col in df_f.columns and date_col not in cols_to_keep:
                 cols_to_keep.append(date_col)
@@ -671,23 +702,37 @@ else:
             sub["_hover_fab"]  = sub["FAB"].apply(lambda x: str(int(x)) if pd.notna(x) else "—")
             sub["_hover_q"]    = sub["QUANTITE"].apply(lambda x: str(int(x)) if pd.notna(x) else "—")
             sub["_hover_p"]    = sub["PRIX TOTAL"].apply(lambda x: f"{x:,.2f} €".replace(",", " ").replace(".", ",") if pd.notna(x) else "—")
+            
+            # Attribuer la couleur selon le dictionnaire global client_color_map
+            sub["_color"] = sub["CLIENT"].map(client_color_map).fillna("#7f7f7f")
 
             fig_sc = go.Figure()
-            fig_sc.add_trace(go.Scatter(
-                x=sub["DATE COMMANDE"], y=sub[delai_col], mode="markers",
-                marker=dict(size=sub["_size"], color=color, opacity=0.75, line=dict(color="white", width=1)),
-                customdata=np.stack([
-                    sub["_hover_fab"], 
-                    sub["CLIENT"].fillna("—"), 
-                    sub["NOM PRODUIT"].fillna("—"), 
-                    sub["_hover_q"], 
-                    sub["_hover_p"], 
-                    sub["DATE COMMANDE"].apply(fmt_date), 
-                    sub["_date_assoc"]
-                ], axis=1),
-                hovertemplate=("<b>FAB %{customdata[0]}</b><br>Client : %{customdata[1]}<br>Produit : %{customdata[2]}<br>Quantité : %{customdata[3]}<br>Prix total : %{customdata[4]}<br>Date commande : %{customdata[5]}<br>Date associée : %{customdata[6]}<br><b>Délai : %{y:.0f} j.o.</b><extra></extra>"),
-                showlegend=False,
-            ))
+            
+            # Traçage des points groupés par client pour permettre l'affichage par légende interactive
+            for client_name, group_df in sub.groupby("CLIENT"):
+                client_color = client_color_map.get(client_name, "#7f7f7f")
+                fig_sc.add_trace(go.Scatter(
+                    x=group_df["DATE COMMANDE"], 
+                    y=group_df[delai_col], 
+                    mode="markers",
+                    name=str(client_name),
+                    marker=dict(
+                        size=group_df["_size"], 
+                        color=client_color, 
+                        opacity=0.8, 
+                        line=dict(color="white", width=1)
+                    ),
+                    customdata=np.stack([
+                        group_df["_hover_fab"], 
+                        group_df["CLIENT"].fillna("—"), 
+                        group_df["NOM PRODUIT"].fillna("—"), 
+                        group_df["_hover_q"], 
+                        group_df["_hover_p"], 
+                        group_df["DATE COMMANDE"].apply(fmt_date), 
+                        group_df["_date_assoc"]
+                    ], axis=1),
+                    hovertemplate=("<b>FAB %{customdata[0]}</b><br>Client : %{customdata[1]}<br>Produit : %{customdata[2]}<br>Quantité : %{customdata[3]}<br>Prix total : %{customdata[4]}<br>Date commande : %{customdata[5]}<br>Date associée : %{customdata[6]}<br><b>Délai : %{y:.0f} j.o.</b><extra></extra>"),
+                ))
 
             if delai_col == "Délai entre départ matière/ départ impression & achats":
                 moy = avg_entre_dept
@@ -695,13 +740,14 @@ else:
                 moy = get_mean(sub[delai_col])
                 
             if pd.notna(moy):
-                fig_sc.add_hline(y=moy, line_dash="dash", line_color=color, annotation_text=f"Moy. {moy:.1f} j.o.", annotation_position="top right", annotation_font_color=color)
+                fig_sc.add_hline(y=moy, line_dash="dash", line_color="#333333", annotation_text=f"Moy. {moy:.1f} j.o.", annotation_position="top right", annotation_font_color="#333333")
 
             fig_sc.update_layout(
                 title=dict(text=f"<b>{label}</b>", font=dict(size=12, color="#1a5276"), x=0),
                 xaxis=dict(title="Date commande", showgrid=True, gridcolor="#ececec", tickformat="%b %Y"),
                 yaxis=dict(title="Jours ouvrés", showgrid=True, gridcolor="#ececec"),
-                height=320, margin=dict(l=50, r=20, t=45, b=50), plot_bgcolor="white", paper_bgcolor="#f8f9fa",
+                height=340, margin=dict(l=50, r=20, t=45, b=50), plot_bgcolor="white", paper_bgcolor="#f8f9fa",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=9))
             )
             with cols[col_idx]:
                 st.plotly_chart(fig_sc, use_container_width=True, key=f"scatter_{delai_col}")
