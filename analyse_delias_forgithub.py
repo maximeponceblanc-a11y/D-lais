@@ -159,7 +159,6 @@ def load_data():
 
     return df, DATE_COLS
 
-# Configuration des sections : les deux nouveaux délais placés en tout premier
 SECTIONS = [
     ("Délai total: Devis / Dernière livraison",
      "Délai total: Devis / Dernière livraison", "#1f4e79", "DATE DE LA DERNIERE LIVRAISON", 0),
@@ -202,9 +201,13 @@ SECTIONS = [
 ]
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  HELPERS
+#  HELPERS (SÉCURISÉS)
 # ══════════════════════════════════════════════════════════════════════════════
 def fmt_date(val):
+    if isinstance(val, (pd.Series, np.ndarray, list)):
+        if len(val) == 0:
+            return "—"
+        val = val.iloc[0] if hasattr(val, 'iloc') else val[0]
     if pd.isna(val) or val is None:
         return "—"
     try:
@@ -260,7 +263,6 @@ with st.sidebar:
         fab_list = sorted(df["FAB"].dropna().astype(int).unique().tolist())
         fab_choice = st.selectbox("Numéro FAB", options=fab_list)
     else:
-        # Inversion : Filtres données en premier
         st.markdown("### 🔎 Filtres données")
 
         clients = sorted(df["CLIENT"].dropna().unique().tolist())
@@ -273,7 +275,6 @@ with st.sidebar:
         else:
             q_range = (q_min_all, q_max_all)
 
-        # Filtre sur PRIX TOTAL
         p_min_all = float(df["PRIX TOTAL"].min(skipna=True)) if pd.notna(df["PRIX TOTAL"].min()) else 0.0
         p_max_all = float(df["PRIX TOTAL"].max(skipna=True)) if pd.notna(df["PRIX TOTAL"].max()) else 1000.0
         if p_min_all < p_max_all:
@@ -290,7 +291,6 @@ with st.sidebar:
             date_range = None
 
         st.markdown("---")
-        # Filtrer par plages de délais en second
         st.markdown("### 🎚️ Filtrer par plages de délais")
         st.caption("Sélectionnez les valeurs minimales et maximales acceptées pour chaque délai (en j.o.).")
         
@@ -393,7 +393,6 @@ if vue == "📁 Vue par dossier":
     def get_v(col):
         return safe_float(row.get(col))
 
-    # --- NOUVELLE LOGIQUE D'ALIGNEMENT POUR VUE SPÉCIFIQUE ---
     d_ouv = get_v("Délai ouverture: Devis / Ouverture de dossier")
     d_ouv = d_ouv if not np.isnan(d_ouv) else 0
 
@@ -415,17 +414,14 @@ if vue == "📁 Vue par dossier":
     d_tot_prem_liv = get_v("Délai total: Ouverture / Première livraison")
 
     def base_for(label):
-        # 1. Les délais démarrant du DEVIS restent alignés à gauche (0)
         if "Devis /" in label:
             return 0
             
-        # 2. Tous les autres délais démarrent par défaut au moment de l'OUVERTURE
         base = d_ouv
         
         if "Délai entre départ matière/ départ impression & achats" in label:
             return base + min_mat_tir
         if "Délai marine: Premier envoi / Première livraison" in label:
-            # S'appuie sur la Première livraison pour remonter dans le temps, ou max_mat_tir en solution de repli
             val_marine_1 = get_v("Délai marine: Premier envoi / Première livraison")
             val_1st_liv = get_v("Délai total: Ouverture / Première livraison")
             if not np.isnan(val_1st_liv) and not np.isnan(val_marine_1):
@@ -444,7 +440,6 @@ if vue == "📁 Vue par dossier":
             return base + (d_imp_tot if not np.isnan(d_imp_tot) else max_f_m + (d_imp_sub if not np.isnan(d_imp_sub) else 0))
             
         return base
-    # ---------------------------------------------------------
 
     labels, values, colors, texts, bases = [], [], [], [], []
     for label, col, color, _, _ in SECTIONS:
@@ -526,7 +521,6 @@ else:
     def get_avg(col):
         return get_mean(df_f[col]) if col in df_f.columns else np.nan
 
-    # --- NOUVELLE LOGIQUE D'ALIGNEMENT POUR VUE MOYENNE ---
     avg_ouv = get_avg("Délai ouverture: Devis / Ouverture de dossier")
     avg_ouv = avg_ouv if not np.isnan(avg_ouv) else 0
 
@@ -554,11 +548,9 @@ else:
     avg_tot_prem_liv = get_avg("Délai total: Ouverture / Première livraison")
 
     def base_avg_for(label):
-        # 1. Les délais démarrant du DEVIS restent à 0
         if "Devis /" in label:
             return 0
             
-        # 2. Les autres démarrent au minimum à la fin de l'OUVERTURE
         base = avg_ouv
         
         if "Délai entre départ matière/ départ impression & achats" in label:
@@ -580,7 +572,6 @@ else:
             return base + (avg_imp_tot if not np.isnan(avg_imp_tot) else max_f_m_avg + (avg_imp_sub if not np.isnan(avg_imp_sub) else 0))
             
         return base
-    # ---------------------------------------------------------
 
     labels_a, values_a, colors_a, texts_a, bases_a = [], [], [], [], []
     for label, col, color, _, _ in SECTIONS:
@@ -642,7 +633,6 @@ else:
         "Délai Impression / Départ en prod tirages et achats":      "DEPART EN PROD TIRAGES & ACHATS",
     }
 
-    # Calcul de la taille du point basé sur PRIX TOTAL
     p_vals = df_f["PRIX TOTAL"].dropna() if "PRIX TOTAL" in df_f.columns else pd.Series()
     p_min_v = p_vals.min() if len(p_vals) else 0
     p_max_v = p_vals.max() if len(p_vals) else 1
@@ -664,7 +654,12 @@ else:
             if delai_col not in df_f.columns:
                 continue
 
-            sub = df_f[["FAB", "CLIENT", "NOM PRODUIT", "QUANTITE", "PRIX TOTAL", "DATE COMMANDE", delai_col] + ([date_col] if date_col and date_col in df_f.columns else [])].dropna(subset=["DATE COMMANDE", delai_col])
+            # Correction des doublons de colonnes
+            cols_to_keep = ["FAB", "CLIENT", "NOM PRODUIT", "QUANTITE", "PRIX TOTAL", "DATE COMMANDE", delai_col]
+            if date_col and date_col in df_f.columns and date_col not in cols_to_keep:
+                cols_to_keep.append(date_col)
+
+            sub = df_f[cols_to_keep].dropna(subset=["DATE COMMANDE", delai_col])
             if sub.empty:
                 with cols[col_idx]:
                     st.caption(f"🔍 *{label}* — aucun point")
@@ -681,7 +676,15 @@ else:
             fig_sc.add_trace(go.Scatter(
                 x=sub["DATE COMMANDE"], y=sub[delai_col], mode="markers",
                 marker=dict(size=sub["_size"], color=color, opacity=0.75, line=dict(color="white", width=1)),
-                customdata=np.stack([sub["_hover_fab"], sub["CLIENT"].fillna("—"), sub["NOM PRODUIT"].fillna("—"), sub["_hover_q"], sub["_hover_p"], sub["DATE COMMANDE"].apply(fmt_date), sub["_date_assoc"]], axis=1),
+                customdata=np.stack([
+                    sub["_hover_fab"], 
+                    sub["CLIENT"].fillna("—"), 
+                    sub["NOM PRODUIT"].fillna("—"), 
+                    sub["_hover_q"], 
+                    sub["_hover_p"], 
+                    sub["DATE COMMANDE"].apply(fmt_date), 
+                    sub["_date_assoc"]
+                ], axis=1),
                 hovertemplate=("<b>FAB %{customdata[0]}</b><br>Client : %{customdata[1]}<br>Produit : %{customdata[2]}<br>Quantité : %{customdata[3]}<br>Prix total : %{customdata[4]}<br>Date commande : %{customdata[5]}<br>Date associée : %{customdata[6]}<br><b>Délai : %{y:.0f} j.o.</b><extra></extra>"),
                 showlegend=False,
             ))
