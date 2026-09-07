@@ -393,6 +393,10 @@ if vue == "📁 Vue par dossier":
     def get_v(col):
         return safe_float(row.get(col))
 
+    # --- NOUVELLE LOGIQUE D'ALIGNEMENT POUR VUE SPÉCIFIQUE ---
+    d_ouv = get_v("Délai ouverture: Devis / Ouverture de dossier")
+    d_ouv = d_ouv if not np.isnan(d_ouv) else 0
+
     d_cmd_mat = get_v("Délai commande matière: Ouverture / Appel matière")
     d_rec_mat = get_v("Délai réception matière: Appel matière / Complet matière")
     d_fichier  = get_v("Délai Fichier :Ouverture / fichier définitif")
@@ -411,19 +415,36 @@ if vue == "📁 Vue par dossier":
     d_tot_prem_liv = get_v("Délai total: Ouverture / Première livraison")
 
     def base_for(label):
+        # 1. Les délais démarrant du DEVIS restent alignés à gauche (0)
+        if "Devis /" in label:
+            return 0
+            
+        # 2. Tous les autres délais démarrent par défaut au moment de l'OUVERTURE
+        base = d_ouv
+        
         if "Délai entre départ matière/ départ impression & achats" in label:
-            return min_mat_tir
+            return base + min_mat_tir
         if "Délai marine: Premier envoi / Première livraison" in label:
-            return max_mat_tir
+            # S'appuie sur la Première livraison pour remonter dans le temps, ou max_mat_tir en solution de repli
+            val_marine_1 = get_v("Délai marine: Premier envoi / Première livraison")
+            val_1st_liv = get_v("Délai total: Ouverture / Première livraison")
+            if not np.isnan(val_1st_liv) and not np.isnan(val_marine_1):
+                return base + val_1st_liv - val_marine_1
+            return base + max_mat_tir
         if "Délai marine: Première livraison/ Dernière livraison" in label:
-            return d_tot_prem_liv if not np.isnan(d_tot_prem_liv) else 0
-        if "Appel matière / Complet" in label: return d_cmd_mat if not np.isnan(d_cmd_mat) else 0
-        if "Complet matière / Départ" in label: return (d_cmd_mat if not np.isnan(d_cmd_mat) else 0) + (d_rec_mat if not np.isnan(d_rec_mat) else 0)
-        if "MAX(fichier/modele) / Impression" in label: return max_f_m
+            return base + (d_tot_prem_liv if not np.isnan(d_tot_prem_liv) else 0)
+        if "Appel matière / Complet" in label: 
+            return base + (d_cmd_mat if not np.isnan(d_cmd_mat) else 0)
+        if "Complet matière / Départ" in label: 
+            return base + (d_cmd_mat if not np.isnan(d_cmd_mat) else 0) + (d_rec_mat if not np.isnan(d_rec_mat) else 0)
+        if "MAX(fichier/modele) / Impression" in label: 
+            return base + max_f_m
         if "Impression / Départ en prod" in label:
             d_imp_tot = get_v("Délai total Impression : Ouverture / Impression")
-            return d_imp_tot if not np.isnan(d_imp_tot) else max_f_m + (d_imp_sub if not np.isnan(d_imp_sub) else 0)
-        return 0
+            return base + (d_imp_tot if not np.isnan(d_imp_tot) else max_f_m + (d_imp_sub if not np.isnan(d_imp_sub) else 0))
+            
+        return base
+    # ---------------------------------------------------------
 
     labels, values, colors, texts, bases = [], [], [], [], []
     for label, col, color, _, _ in SECTIONS:
@@ -505,6 +526,10 @@ else:
     def get_avg(col):
         return get_mean(df_f[col]) if col in df_f.columns else np.nan
 
+    # --- NOUVELLE LOGIQUE D'ALIGNEMENT POUR VUE MOYENNE ---
+    avg_ouv = get_avg("Délai ouverture: Devis / Ouverture de dossier")
+    avg_ouv = avg_ouv if not np.isnan(avg_ouv) else 0
+
     avg_cmd_mat = get_avg("Délai commande matière: Ouverture / Appel matière")
     avg_rec_mat = get_avg("Délai réception matière: Appel matière / Complet matière")
     avg_fichier  = get_avg("Délai Fichier :Ouverture / fichier définitif")
@@ -529,17 +554,33 @@ else:
     avg_tot_prem_liv = get_avg("Délai total: Ouverture / Première livraison")
 
     def base_avg_for(label):
+        # 1. Les délais démarrant du DEVIS restent à 0
+        if "Devis /" in label:
+            return 0
+            
+        # 2. Les autres démarrent au minimum à la fin de l'OUVERTURE
+        base = avg_ouv
+        
         if "Délai entre départ matière/ départ impression & achats" in label:
-            return min_mat_tir_avg
+            return base + min_mat_tir_avg
         if "Délai marine: Premier envoi / Première livraison" in label:
-            return max_mat_tir_avg
+            val_marine_1_avg = get_avg("Délai marine: Premier envoi / Première livraison")
+            if not np.isnan(avg_tot_prem_liv) and not np.isnan(val_marine_1_avg):
+                return base + avg_tot_prem_liv - val_marine_1_avg
+            return base + max_mat_tir_avg
         if "Délai marine: Première livraison/ Dernière livraison" in label:
-            return avg_tot_prem_liv if not np.isnan(avg_tot_prem_liv) else 0
-        if "Appel matière / Complet" in label: return avg_cmd_mat if not np.isnan(avg_cmd_mat) else 0
-        if "Complet matière / Départ" in label: return (avg_cmd_mat if not np.isnan(avg_cmd_mat) else 0) + (avg_rec_mat if not np.isnan(avg_rec_mat) else 0)
-        if "MAX(fichier/modele) / Impression" in label: return max_f_m_avg
-        if "Impression / Départ en prod" in label: return avg_imp_tot if not np.isnan(avg_imp_tot) else max_f_m_avg + (avg_imp_sub if not np.isnan(avg_imp_sub) else 0)
-        return 0
+            return base + (avg_tot_prem_liv if not np.isnan(avg_tot_prem_liv) else 0)
+        if "Appel matière / Complet" in label: 
+            return base + (avg_cmd_mat if not np.isnan(avg_cmd_mat) else 0)
+        if "Complet matière / Départ" in label: 
+            return base + (avg_cmd_mat if not np.isnan(avg_cmd_mat) else 0) + (avg_rec_mat if not np.isnan(avg_rec_mat) else 0)
+        if "MAX(fichier/modele) / Impression" in label: 
+            return base + max_f_m_avg
+        if "Impression / Départ en prod" in label: 
+            return base + (avg_imp_tot if not np.isnan(avg_imp_tot) else max_f_m_avg + (avg_imp_sub if not np.isnan(avg_imp_sub) else 0))
+            
+        return base
+    # ---------------------------------------------------------
 
     labels_a, values_a, colors_a, texts_a, bases_a = [], [], [], [], []
     for label, col, color, _, _ in SECTIONS:
